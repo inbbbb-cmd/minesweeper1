@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Сапёр</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        .cell {
+            width: 32px;
+            height: 32px;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.1s;
+        }
+        .cell:hover:not(.revealed) {
+            transform: scale(1.05);
+        }
+        .cell.revealed {
+            background: #e5e7eb;
+        }
+        .cell.mine-exploded {
+            background: #ef4444 !important;
+        }
+        .num-1 { color: #3b82f6; }
+        .num-2 { color: #22c55e; }
+        .num-3 { color: #ef4444; }
+        .num-4 { color: #7c3aed; }
+        .num-5 { color: #991b1b; }
+        .num-6 { color: #0891b2; }
+        .num-7 { color: #000; }
+        .num-8 { color: #6b7280; }
+    </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 flex flex-col items-center justify-center p-4">
+    
+    <div class="bg-slate-700 rounded-2xl shadow-2xl p-6 max-w-fit">
+        <h1 class="text-4xl font-bold text-center text-white mb-6">💣 Сапёр</h1>
+        
+        <!-- Выбор сложности -->
+        <div class="flex gap-2 justify-center mb-4">
+            <button onclick="setDifficulty('easy')" id="btn-easy" 
+                class="px-4 py-2 rounded-lg font-semibold transition-all bg-green-500 hover:bg-green-600 text-white">
+                Легко
+            </button>
+            <button onclick="setDifficulty('medium')" id="btn-medium"
+                class="px-4 py-2 rounded-lg font-semibold transition-all bg-yellow-500 hover:bg-yellow-600 text-white">
+                Средне
+            </button>
+            <button onclick="setDifficulty('hard')" id="btn-hard"
+                class="px-4 py-2 rounded-lg font-semibold transition-all bg-red-500 hover:bg-red-600 text-white">
+                Сложно
+            </button>
+        </div>
+
+        <!-- Панель статистики -->
+        <div class="flex justify-between items-center bg-slate-800 rounded-xl p-4 mb-4">
+            <div class="flex items-center gap-2">
+                <span class="text-2xl">🚩</span>
+                <span id="mines-count" class="text-2xl font-mono text-red-400 font-bold">10</span>
+            </div>
+            <button onclick="restartGame()" 
+                class="text-4xl hover:scale-110 transition-transform cursor-pointer" id="face-btn">
+                😊
+            </button>
+            <div class="flex items-center gap-2">
+                <span class="text-2xl">⏱️</span>
+                <span id="timer" class="text-2xl font-mono text-blue-400 font-bold">000</span>
+            </div>
+        </div>
+
+        <!-- Игровое поле -->
+        <div id="game-board" class="grid gap-1 bg-slate-800 p-3 rounded-xl mx-auto">
+        </div>
+
+        <!-- Сообщение о результате -->
+        <div id="game-message" class="hidden mt-4 text-center text-2xl font-bold p-4 rounded-xl"></div>
+
+        <!-- Инструкции -->
+        <div class="mt-4 text-slate-400 text-sm text-center">
+            <p>🖱️ ЛКМ — открыть ячейку | ПКМ — поставить флажок</p>
+        </div>
+    </div>
+
+    <script>
+        // Настройки сложности
+        const difficulties = {
+            easy: { rows: 9, cols: 9, mines: 10 },
+            medium: { rows: 16, cols: 16, mines: 40 },
+            hard: { rows: 16, cols: 30, mines: 99 }
+        };
+
+        let currentDifficulty = 'easy';
+        let rows, cols, totalMines;
+        let board = [];
+        let revealed = [];
+        let flagged = [];
+        let gameOver = false;
+        let gameStarted = false;
+        let timer = 0;
+        let timerInterval = null;
+        let minesLeft;
+
+        // Инициализация игры
+        function init() {
+            const settings = difficulties[currentDifficulty];
+            rows = settings.rows;
+            cols = settings.cols;
+            totalMines = settings.mines;
+            minesLeft = totalMines;
+
+            board = [];
+            revealed = [];
+            flagged = [];
+            gameOver = false;
+            gameStarted = false;
+            timer = 0;
+
+            clearInterval(timerInterval);
+            timerInterval = null;
+
+            document.getElementById('timer').textContent = '000';
+            document.getElementById('mines-count').textContent = minesLeft.toString().padStart(2, '0');
+            document.getElementById('face-btn').textContent = '😊';
+            document.getElementById('game-message').classList.add('hidden');
+
+            // Создаем пустое поле
+            for (let i = 0; i < rows; i++) {
+                board[i] = [];
+                revealed[i] = [];
+                flagged[i] = [];
+                for (let j = 0; j < cols; j++) {
+                    board[i][j] = 0;
+                    revealed[i][j] = false;
+                    flagged[i][j] = false;
+                }
+            }
+
+            renderBoard();
+        }
+
+        // Размещение мин после первого клика
+        function placeMines(firstRow, firstCol) {
+            let minesPlaced = 0;
+            
+            while (minesPlaced < totalMines) {
+                const row = Math.floor(Math.random() * rows);
+                const col = Math.floor(Math.random() * cols);
+
+                // Не ставим мину на первый клик и вокруг него
+                if (Math.abs(row - firstRow) <= 1 && Math.abs(col - firstCol) <= 1) {
+                    continue;
+                }
+
+                if (board[row][col] !== -1) {
+                    board[row][col] = -1;
+                    minesPlaced++;
+                }
+            }
+
+            // Вычисляем числа
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    if (board[i][j] === -1) continue;
+                    board[i][j] = countAdjacentMines(i, j);
+                }
+            }
+        }
+
+        // Подсчет мин вокруг ячейки
+        function countAdjacentMines(row, col) {
+            let count = 0;
+            for (let i = -1; i <= 1; i++) {
+                for (let j = -1; j <= 1; j++) {
+                    const newRow = row + i;
+                    const newCol = col + j;
+                    if (newRow >= 0 && newRow < rows && newCol >= 0 && newCol < cols) {
+                        if (board[newRow][newCol] === -1) count++;
+                    }
+                }
+            }
+            return count;
+        }
+
+        // Отрисовка поля
+        function renderBoard() {
+            const gameBoard = document.getElementById('game-board');
+            gameBoard.innerHTML = '';
+            gameBoard.style.gridTemplateColumns = `repeat(${cols}, 32px)`;
+
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    const cell = document.createElement('button');
+                    cell.className = 'cell rounded flex items-center justify-center cursor-pointer select-none';
+                    cell.dataset.row = i;
+                    cell.dataset.col = j;
+
+                    if (revealed[i][j]) {
+                        cell.classList.add('revealed');
+                        if (board[i][j] === -1) {
+                            cell.textContent = '💣';
+                            if (cell.classList.contains('mine-exploded')) {
+                                cell.classList.add('mine-exploded');
+                            }
+                        } else if (board[i][j] > 0) {
+                            cell.textContent = board[i][j];
+                            cell.classList.add(`num-${board[i][j]}`);
+                        }
+                    } else {
+                        cell.classList.add('bg-slate-500', 'hover:bg-slate-400');
+                        if (flagged[i][j]) {
+                            cell.textContent = '🚩';
+                        }
+                    }
+
+                    cell.addEventListener('click', () => handleClick(i, j));
+                    cell.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        handleRightClick(i, j);
+                    });
+
+                    gameBoard.appendChild(cell);
+                }
+            }
+        }
+
+        // Обработка клика
+        function handleClick(row, col) {
+            if (gameOver || flagged[row][col] || revealed[row][col]) return;
+
+            if (!gameStarted) {
+                gameStarted = true;
+                placeMines(row, col);
+                startTimer();
+            }
+
+            if (board[row][col] === -1) {
+                // Проигрыш
+                gameOver = true;
+                clearInterval(timerInterval);
+                revealAllMines();
+                
+                const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                cell.classList.add('mine-exploded');
+                
+                document.getElementById('face-btn').textContent = '😵';
+                showMessage('Вы проиграли! 💥', 'bg-red-600');
+            } else {
+                revealCell(row, col);
+                checkWin();
+            }
+
+            renderBoard();
+        }
+
+        // Обработка правого клика (флажок)
+        function handleRightClick(row, col) {
+            if (gameOver || revealed[row][col]) return;
+
+            if (flagged[row][col]) {
+                flagged[row][col] = false;
+                minesLeft++;
+            } else {
+                flagged[row][col] = true;
+                minesLeft--;
+            }
+
+            document.getElementById('mines-count').textContent = minesLeft.toString().padStart(2, '0');
+            renderBoard();
+        }
+
+        // Открытие ячейки
+        function revealCell(row, col) {
+            if (row < 0 || row >= rows || col < 0 || col >= cols) return;
+            if (revealed[row][col] || flagged[row][col]) return;
+
+            revealed[row][col] = true;
+
+            if (board[row][col] === 0) {
+                // Открываем соседние ячейки
+                for (let i = -1; i <= 1; i++) {
+                    for (let j = -1; j <= 1; j++) {
+                        revealCell(row + i, col + j);
+                    }
+                }
+            }
+        }
+
+        // Показать все мины
+        function revealAllMines() {
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    if (board[i][j] === -1) {
+                        revealed[i][j] = true;
+                    }
+                }
+            }
+        }
+
+        // Проверка победы
+        function checkWin() {
+            let unrevealedSafeCells = 0;
+            for (let i = 0; i < rows; i++) {
+                for (let j = 0; j < cols; j++) {
+                    if (!revealed[i][j] && board[i][j] !== -1) {
+                        unrevealedSafeCells++;
+                    }
+                }
+            }
+
+            if (unrevealedSafeCells === 0) {
+                gameOver = true;
+                clearInterval(timerInterval);
+                document.getElementById('face-btn').textContent = '😎';
+                showMessage(`Победа! 🎉 Время: ${timer} сек.`, 'bg-green-600');
+            }
+        }
+
+        // Показать сообщение
+        function showMessage(text, bgClass) {
+            const msg = document.getElementById('game-message');
+            msg.textContent = text;
+            msg.className = `mt-4 text-center text-2xl font-bold p-4 rounded-xl text-white ${bgClass}`;
+            msg.classList.remove('hidden');
+        }
+
+        // Таймер
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                timer++;
+                document.getElementById('timer').textContent = timer.toString().padStart(3, '0');
+                if (timer >= 999) {
+                    clearInterval(timerInterval);
+                }
+            }, 1000);
+        }
+
+        // Выбор сложности
+        function setDifficulty(difficulty) {
+            currentDifficulty = difficulty;
+            
+            // Обновляем стили кнопок
+            document.querySelectorAll('[id^="btn-"]').forEach(btn => {
+                btn.classList.remove('ring-4', 'ring-white');
+            });
+            document.getElementById(`btn-${difficulty}`).classList.add('ring-4', 'ring-white');
+            
+            init();
+        }
+
+        // Перезапуск игры
+        function restartGame() {
+            init();
+        }
+
+        // Запуск при загрузке
+        setDifficulty('easy');
+    </script>
+</body>
+</html>
