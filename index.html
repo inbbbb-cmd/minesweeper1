@@ -4,7 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Сапёр</title>
+
+    <!-- Telegram WebApp API -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <!-- Tailwind через CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
     <style>
         .cell {
             width: 32px;
@@ -35,7 +41,8 @@
 <body class="min-h-screen bg-gradient-to-br from-slate-800 to-slate-900 flex flex-col items-center justify-center p-4">
     
     <div class="bg-slate-700 rounded-2xl shadow-2xl p-6 max-w-fit">
-        <h1 class="text-4xl font-bold text-center text-white mb-6">💣 Сапёр</h1>
+        <h1 class="text-4xl font-bold text-center text-white mb-2">💣 Сапёр</h1>
+        <div id="player-info" class="text-center text-slate-300 mb-4 text-sm hidden"></div>
         
         <!-- Выбор сложности -->
         <div class="flex gap-2 justify-center mb-4">
@@ -54,18 +61,30 @@
         </div>
 
         <!-- Панель статистики -->
-        <div class="flex justify-between items-center bg-slate-800 rounded-xl p-4 mb-4">
+        <div class="flex justify-between items-center bg-slate-800 rounded-xl p-4 mb-3">
             <div class="flex items-center gap-2">
                 <span class="text-2xl">🚩</span>
                 <span id="mines-count" class="text-2xl font-mono text-red-400 font-bold">10</span>
             </div>
             <button onclick="restartGame()" 
-                class="text-4xl hover:scale-110 transition-transform cursor-pointer" id="face-btn">
+                class="text-4xl hover:scale-110 active:scale-95 transition-transform cursor-pointer" id="face-btn">
                 😊
             </button>
             <div class="flex items-center gap-2">
                 <span class="text-2xl">⏱️</span>
                 <span id="timer" class="text-2xl font-mono text-blue-400 font-bold">000</span>
+            </div>
+        </div>
+
+        <!-- Локальная статистика -->
+        <div id="stats-panel" class="flex justify-between gap-4 text-slate-200 text-sm mb-3">
+            <div>
+                <div class="font-semibold">Лучшая партия (локально)</div>
+                <div id="best-info" class="font-mono text-xs text-slate-300">—</div>
+            </div>
+            <div>
+                <div class="font-semibold">Последний результат</div>
+                <div id="last-info" class="font-mono text-xs text-slate-300">—</div>
             </div>
         </div>
 
@@ -76,19 +95,36 @@
         <!-- Сообщение о результате -->
         <div id="game-message" class="hidden mt-4 text-center text-2xl font-bold p-4 rounded-xl"></div>
 
+        <!-- Кнопка отправки результата в Telegram (для обычного браузера) -->
+        <div id="telegram-share" class="hidden mt-3 flex flex-col items-center gap-2">
+            <button id="send-telegram-btn"
+                class="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 text-white font-semibold flex items-center gap-2 text-sm">
+                <span>Отправить результат в бота</span>
+                <span>📲</span>
+            </button>
+            <p class="text-xs text-slate-400 max-w-xs text-center">
+                Откроется чат с ботом в Telegram. После /start бот может обновить твой рейтинг.
+            </p>
+        </div>
+
         <!-- Инструкции -->
         <div class="mt-4 text-slate-400 text-sm text-center">
-            <p>🖱️ ЛКМ — открыть ячейку | ПКМ — поставить флажок</p>
+            <p>🖱️ ЛКМ — открыть ячейку / быстро открыть вокруг числа | ПКМ — поставить флажок</p>
         </div>
     </div>
 
     <script>
         // Настройки сложности
         const difficulties = {
-            easy: { rows: 9, cols: 9, mines: 10 },
+            easy:   { rows: 9,  cols: 9,  mines: 10 },
             medium: { rows: 16, cols: 16, mines: 40 },
-            hard: { rows: 16, cols: 30, mines: 99 }
+            hard:   { rows: 16, cols: 30, mines: 99 }
         };
+
+        // Имя Telegram-бота (без @) — ТВОЙ бот
+        const TELEGRAM_BOT_USERNAME = 'Games_trivia_bot';
+
+        const STATS_KEY = 'minesweeper_stats_v1';
 
         let currentDifficulty = 'easy';
         let rows, cols, totalMines;
@@ -100,6 +136,37 @@
         let timer = 0;
         let timerInterval = null;
         let minesLeft;
+        let explodedCell = null;
+        let lastResult = null;
+
+        // Telegram WebApp контекст
+        let tg = null;
+        let isTelegram = false;
+        let tgUser = null;
+
+        function initTelegram() {
+            try {
+                if (window.Telegram && window.Telegram.WebApp) {
+                    tg = window.Telegram.WebApp;
+                    isTelegram = true;
+                    tg.ready();
+                    tg.expand();
+
+                    tgUser = tg.initDataUnsafe && tg.initDataUnsafe.user ? tg.initDataUnsafe.user : null;
+
+                    const playerInfo = document.getElementById('player-info');
+                    if (tgUser && playerInfo) {
+                        const name = tgUser.username
+                            ? '@' + tgUser.username
+                            : (tgUser.first_name || 'Игрок');
+                        playerInfo.textContent = 'Игрок: ' + name;
+                        playerInfo.classList.remove('hidden');
+                    }
+                }
+            } catch (e) {
+                // Если не в Telegram — просто работаем как обычный сайт
+            }
+        }
 
         // Инициализация игры
         function init() {
@@ -115,6 +182,8 @@
             gameOver = false;
             gameStarted = false;
             timer = 0;
+            explodedCell = null;
+            lastResult = null;
 
             clearInterval(timerInterval);
             timerInterval = null;
@@ -123,6 +192,8 @@
             document.getElementById('mines-count').textContent = minesLeft.toString().padStart(2, '0');
             document.getElementById('face-btn').textContent = '😊';
             document.getElementById('game-message').classList.add('hidden');
+            hideTelegramShare();
+            updateStatsPanels();
 
             // Создаем пустое поле
             for (let i = 0; i < rows; i++) {
@@ -199,7 +270,7 @@
                         cell.classList.add('revealed');
                         if (board[i][j] === -1) {
                             cell.textContent = '💣';
-                            if (cell.classList.contains('mine-exploded')) {
+                            if (explodedCell && explodedCell.row === i && explodedCell.col === j) {
                                 cell.classList.add('mine-exploded');
                             }
                         } else if (board[i][j] > 0) {
@@ -226,7 +297,16 @@
 
         // Обработка клика
         function handleClick(row, col) {
-            if (gameOver || flagged[row][col] || revealed[row][col]) return;
+            if (gameOver) return;
+
+            // Быстрое открытие вокруг числа
+            if (revealed[row][col]) {
+                quickOpenAroundNumber(row, col);
+                renderBoard();
+                return;
+            }
+
+            if (flagged[row][col]) return;
 
             if (!gameStarted) {
                 gameStarted = true;
@@ -235,22 +315,47 @@
             }
 
             if (board[row][col] === -1) {
-                // Проигрыш
-                gameOver = true;
-                clearInterval(timerInterval);
-                revealAllMines();
-                
-                const cell = document.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                cell.classList.add('mine-exploded');
-                
-                document.getElementById('face-btn').textContent = '😵';
-                showMessage('Вы проиграли! 💥', 'bg-red-600');
+                triggerLoss(row, col, 'Вы проиграли! 💥');
             } else {
                 revealCell(row, col);
                 checkWin();
             }
 
             renderBoard();
+        }
+
+        // Быстрое открытие вокруг числа (если флажков столько, сколько число)
+        function quickOpenAroundNumber(row, col) {
+            if (board[row][col] <= 0) return;
+
+            let flagsAround = 0;
+            for (let i = -1; i <= 1; i++) {
+                for (let j = -1; j <= 1; j++) {
+                    const r = row + i;
+                    const c = col + j;
+                    if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
+                    if (flagged[r][c]) flagsAround++;
+                }
+            }
+
+            if (flagsAround !== board[row][col]) return;
+
+            for (let i = -1; i <= 1; i++) {
+                for (let j = -1; j <= 1; j++) {
+                    const r = row + i;
+                    const c = col + j;
+                    if (r < 0 || r >= rows || c < 0 || c >= cols) continue;
+                    if (flagged[r][c] || revealed[r][c]) continue;
+
+                    if (board[r][c] === -1) {
+                        triggerLoss(r, c, 'Неверный флажок — подрыв! 💥');
+                        return;
+                    } else {
+                        revealCell(r, c);
+                    }
+                }
+            }
+            checkWin();
         }
 
         // Обработка правого клика (флажок)
@@ -280,6 +385,7 @@
                 // Открываем соседние ячейки
                 for (let i = -1; i <= 1; i++) {
                     for (let j = -1; j <= 1; j++) {
+                        if (i === 0 && j === 0) continue;
                         revealCell(row + i, col + j);
                     }
                 }
@@ -294,6 +400,33 @@
                         revealed[i][j] = true;
                     }
                 }
+            }
+        }
+
+        // Подсчет и сохранение результата при проигрыше
+        function triggerLoss(row, col, messageText) {
+            gameOver = true;
+            clearInterval(timerInterval);
+            explodedCell = { row, col };
+            revealAllMines();
+            document.getElementById('face-btn').textContent = '😵';
+
+            const score = calculateScore(false, currentDifficulty, timer);
+            lastResult = {
+                win: false,
+                difficulty: currentDifficulty,
+                time: timer,
+                score,
+                timestamp: Date.now()
+            };
+            saveBestResultIfNeeded(lastResult);
+            updateStatsPanels();
+            showMessage(messageText || 'Вы проиграли! 💥', 'bg-red-600');
+
+            if (isTelegram) {
+                sendResultToTelegramWebApp();
+            } else {
+                showTelegramShare();
             }
         }
 
@@ -312,7 +445,24 @@
                 gameOver = true;
                 clearInterval(timerInterval);
                 document.getElementById('face-btn').textContent = '😎';
-                showMessage(`Победа! 🎉 Время: ${timer} сек.`, 'bg-green-600');
+
+                const score = calculateScore(true, currentDifficulty, timer);
+                lastResult = {
+                    win: true,
+                    difficulty: currentDifficulty,
+                    time: timer,
+                    score,
+                    timestamp: Date.now()
+                };
+                saveBestResultIfNeeded(lastResult);
+                updateStatsPanels();
+                showMessage(`Победа! 🎉 Время: ${timer} сек. · Очки: ${score}`, 'bg-green-600');
+
+                if (isTelegram) {
+                    sendResultToTelegramWebApp();
+                } else {
+                    showTelegramShare();
+                }
             }
         }
 
@@ -321,17 +471,16 @@
             const msg = document.getElementById('game-message');
             msg.textContent = text;
             msg.className = `mt-4 text-center text-2xl font-bold p-4 rounded-xl text-white ${bgClass}`;
-            msg.classList.remove('hidden');
         }
 
         // Таймер
         function startTimer() {
             timerInterval = setInterval(() => {
                 timer++;
-                document.getElementById('timer').textContent = timer.toString().padStart(3, '0');
-                if (timer >= 999) {
-                    clearInterval(timerInterval);
+                if (timer > 999) {
+                    timer = 999;
                 }
+                document.getElementById('timer').textContent = timer.toString().padStart(3, '0');
             }, 1000);
         }
 
@@ -353,7 +502,158 @@
             init();
         }
 
+        // Работа с локальной статистикой
+        function getStats() {
+            try {
+                const raw = localStorage.getItem(STATS_KEY);
+                if (!raw) return {};
+                const parsed = JSON.parse(raw);
+                return parsed && typeof parsed === 'object' ? parsed : {};
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function saveStats(stats) {
+            try {
+                localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        function saveBestResultIfNeeded(result) {
+            const stats = getStats();
+            const key = result.difficulty;
+            const current = stats[key] || { bestTime: null, bestScore: null };
+
+            if (result.win) {
+                if (current.bestTime === null || result.time < current.bestTime) {
+                    current.bestTime = result.time;
+                }
+            }
+            if (current.bestScore === null || result.score > current.bestScore) {
+                current.bestScore = result.score;
+            }
+
+            stats[key] = current;
+            saveStats(stats);
+        }
+
+        function difficultyLabel(key) {
+            switch (key) {
+                case 'easy':   return 'легко';
+                case 'medium': return 'средне';
+                case 'hard':   return 'сложно';
+                default:       return key;
+            }
+        }
+
+        function updateStatsPanels() {
+            const stats = getStats();
+            const bestLabel = document.getElementById('best-info');
+            const lastLabel = document.getElementById('last-info');
+            const diffLabel = difficultyLabel(currentDifficulty);
+            const best = stats[currentDifficulty];
+
+            if (best && (best.bestTime != null || best.bestScore != null)) {
+                const parts = [];
+                if (best.bestTime != null) parts.push(`время: ${best.bestTime} сек.`);
+                if (best.bestScore != null) parts.push(`очки: ${best.bestScore}`);
+                bestLabel.textContent = `${diffLabel}, ${parts.join(' · ')}`;
+            } else {
+                bestLabel.textContent = `Для сложности "${diffLabel}" ещё нет рекордов`;
+            }
+
+            if (lastResult && lastResult.difficulty === currentDifficulty) {
+                lastLabel.textContent = `${lastResult.win ? 'Победа' : 'Поражение'} · ${diffLabel} · ${lastResult.time} сек. · ${lastResult.score} очков`;
+            } else {
+                lastLabel.textContent = 'Сыграй партию, чтобы увидеть результат 🙂';
+            }
+        }
+
+        // Подсчёт очков (чем сложнее и быстрее — тем больше)
+        function calculateScore(win, difficulty, timeSeconds) {
+            const base =
+                difficulty === 'easy'   ? 100 :
+                difficulty === 'medium' ? 300 : 600;
+
+            if (!win) {
+                return Math.round(base * 0.2);
+            }
+
+            const timeBonus = Math.max(0, Math.round(base * 2 - timeSeconds * 5));
+            return base + timeBonus;
+        }
+
+        // Показ / скрытие блока с Telegram (только вне Telegram)
+        function showTelegramShare() {
+            const block = document.getElementById('telegram-share');
+            if (!block || isTelegram) return;
+            block.classList.remove('hidden');
+        }
+
+        function hideTelegramShare() {
+            const block = document.getElementById('telegram-share');
+            if (!block) return;
+            block.classList.add('hidden');
+        }
+
+        // Отправка результата в Telegram WebApp (изнутри Telegram)
+        function sendResultToTelegramWebApp() {
+            if (!isTelegram || !tg || !lastResult) return;
+
+            const payloadObj = {
+                v: 1,
+                d: lastResult.difficulty,
+                w: lastResult.win ? 1 : 0,
+                t: lastResult.time,
+                s: lastResult.score
+                // user_id не нужен, бот возьмёт его из message.from.id
+            };
+
+            try {
+                tg.sendData(JSON.stringify(payloadObj));
+                tg.showAlert('Результат отправлен боту. Открой чат с ботом, чтобы увидеть обновлённый рейтинг.');
+            } catch (e) {
+                // чтобы игра не падала
+            }
+        }
+
+        // Отправка результата в Telegram-бота через deep-link (для обычного браузера)
+        function sendResultToTelegram() {
+            if (!lastResult) {
+                alert('Сначала сыграй партию, чтобы было что отправлять 🙂');
+                return;
+            }
+
+            if (!TELEGRAM_BOT_USERNAME) {
+                alert('Не задано имя Telegram-бота.');
+                return;
+            }
+
+            const payloadObj = {
+                v: 1,
+                d: lastResult.difficulty,
+                w: lastResult.win ? 1 : 0,
+                t: lastResult.time,
+                s: lastResult.score
+            };
+
+            const json = JSON.stringify(payloadObj);
+            const base64 = btoa(json)
+                .replace(/=+$/g, '')
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_');
+
+            const url = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${base64}`;
+            window.open(url, '_blank');
+        }
+
+        document.getElementById('send-telegram-btn').addEventListener('click', sendResultToTelegram);
+
         // Запуск при загрузке
+        initTelegram();
         setDifficulty('easy');
     </script>
 </body>
